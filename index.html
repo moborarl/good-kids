@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#6c5ce7">
+  <title>Good Kids ⭐ บันทึกดาวงานบ้าน</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⭐</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header class="app-header">
+    <div class="header-inner">
+      <button class="brand" id="brandBtn">
+        <span class="brand-star">⭐</span>
+        <span class="brand-text">Good Kids</span>
+      </button>
+      <nav class="header-nav">
+        <button class="nav-btn" data-nav="home">🏠 <span>หน้าหลัก</span></button>
+        <button class="nav-btn" data-nav="rewards">🎁 <span>ของรางวัล</span></button>
+        <button class="nav-btn" data-nav="parent">🔐 <span>ผู้ปกครอง</span></button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="app" class="app-main"></main>
+
+  <!-- ===== Toast ===== -->
+  <div id="toast" class="toast"></div>
+
+  <!-- ===== Star burst animation layer ===== -->
+  <div id="fxLayer" class="fx-layer"></div>
+
+  <!-- ===== Modal ===== -->
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <div id="modalBox" class="modal-box"></div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
