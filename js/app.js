@@ -40,7 +40,7 @@ const DEFAULT_DATA = {
 };
 
 let data = load();
-let state = { view: 'home', kidId: null, parentUnlocked: false, parentTab: 'kids', pinInput: '' };
+let state = { view: 'home', kidId: null, parentUnlocked: false, parentTab: 'kids', pinInput: '', summaryPeriod: 'week', summaryKid: 'all' };
 
 function migrate(d) {
   if (typeof d.metaTs !== 'number') d.metaTs = 0;
@@ -243,6 +243,7 @@ function render() {
   });
   if (state.view === 'home') renderHome();
   else if (state.view === 'kid') renderKid();
+  else if (state.view === 'summary') renderSummary();
   else if (state.view === 'rewards') renderRewards();
   else if (state.view === 'parent') renderParent();
 }
@@ -396,6 +397,99 @@ function historyRow(l) {
       </div>
       <span class="history-stars ${l.type}">${l.type === 'earn' ? '+' : '−'}${l.stars} ⭐</span>
     </div>`;
+}
+
+// ============================================================
+// SUMMARY — per-category star report
+// ============================================================
+const PERIODS = [
+  ['week', 'สัปดาห์นี้'],
+  ['month', '30 วัน'],
+  ['all', 'ทั้งหมด'],
+];
+
+function periodStart(p) {
+  if (p === 'week') return weekStart();
+  if (p === 'month') { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 29); return d.getTime(); }
+  return 0;
+}
+
+function renderSummary() {
+  const from = periodStart(state.summaryPeriod);
+  const rows = data.log.filter(l =>
+    l.ts >= from && (state.summaryKid === 'all' || l.kidId === state.summaryKid));
+
+  // group by activity name
+  const groups = new Map(); // name -> {icon, type, count, stars}
+  rows.forEach(l => {
+    const key = l.type + ':' + l.name;
+    const g = groups.get(key) || { name: l.name, icon: l.icon, type: l.type, count: 0, stars: 0 };
+    g.count++; g.stars += l.stars;
+    groups.set(key, g);
+  });
+  const chores = [...groups.values()].filter(g => g.type === 'earn').sort((a, b) => b.count - a.count);
+  const redeems = [...groups.values()].filter(g => g.type === 'spend').sort((a, b) => b.count - a.count);
+  const maxCount = Math.max(1, ...chores.map(g => g.count));
+  const totalEarn = chores.reduce((s, g) => s + g.stars, 0);
+  const totalCount = chores.reduce((s, g) => s + g.count, 0);
+  const totalSpend = redeems.reduce((s, g) => s + g.stars, 0);
+
+  const bar = g => `
+    <div class="sum-row">
+      <span class="sum-ic">${g.icon || '⭐'}</span>
+      <div class="sum-main">
+        <div class="sum-head">
+          <span class="sum-name">${esc(g.name)}</span>
+          <span class="sum-count">${g.count} ครั้ง</span>
+        </div>
+        <div class="sum-bar-track"><div class="sum-bar ${g.type}" style="width:${Math.round(g.count / maxCount * 100)}%"></div></div>
+      </div>
+      <span class="sum-stars ${g.type === 'earn' ? 'earn' : 'spend'}">${g.type === 'earn' ? '+' : '−'}${g.stars} ⭐</span>
+    </div>`;
+
+  app.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">📊 สรุปดาว</h1>
+        <p class="page-sub">ทำอะไรไปแล้วกี่ครั้ง ในช่วงเวลาที่เลือก</p>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <div class="tabs" style="margin-bottom:0">
+        ${PERIODS.map(([id, label]) =>
+          `<button class="tab-btn ${state.summaryPeriod === id ? 'active' : ''}" data-period="${id}">${label}</button>`).join('')}
+      </div>
+      <div class="tabs" style="margin-bottom:0">
+        <button class="tab-btn ${state.summaryKid === 'all' ? 'active' : ''}" data-skid="all">👨‍👩‍👧‍👦 ทุกคน</button>
+        ${data.kids.map(k =>
+          `<button class="tab-btn ${state.summaryKid === k.id ? 'active' : ''}" data-skid="${k.id}">${k.avatar} ${esc(k.name)}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="stat-row">
+      <div class="card stat-card"><div class="stat-value">🧹 ${totalCount}</div><div class="stat-label">ครั้งที่ทำงานบ้าน</div></div>
+      <div class="card stat-card"><div class="stat-value">⭐ ${totalEarn}</div><div class="stat-label">ดาวที่ได้รับ</div></div>
+      <div class="card stat-card"><div class="stat-value">🎁 ${totalSpend}</div><div class="stat-label">ดาวที่ใช้แลก</div></div>
+    </div>
+
+    <h2 class="section-title">🧹 งานบ้านที่ทำ (ต่อประเภท)</h2>
+    <div class="card sum-list">
+      ${chores.length ? chores.map(bar).join('')
+        : `<div class="empty"><span class="empty-icon">🌟</span>ยังไม่มีการทำงานบ้านในช่วงเวลานี้</div>`}
+    </div>
+
+    <h2 class="section-title">🎁 ของรางวัลที่แลก</h2>
+    <div class="card sum-list">
+      ${redeems.length ? redeems.map(bar).join('')
+        : `<div class="empty">ยังไม่มีการแลกของรางวัลในช่วงเวลานี้</div>`}
+    </div>
+  `;
+
+  app.querySelectorAll('[data-period]').forEach(b =>
+    b.addEventListener('click', () => { state.summaryPeriod = b.dataset.period; renderSummary(); }));
+  app.querySelectorAll('[data-skid]').forEach(b =>
+    b.addEventListener('click', () => { state.summaryKid = b.dataset.skid; renderSummary(); }));
 }
 
 // ============================================================

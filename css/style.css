@@ -340,6 +340,31 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .confirm-text { text-align: center; color: var(--ink-2); }
 .confirm-text b { color: var(--ink); }
 
+/* ===== Summary ===== */
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 20px; }
+.sum-list { padding: 6px 0; }
+.sum-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 18px;
+}
+.sum-row + .sum-row { border-top: 1px solid var(--line); }
+.sum-ic {
+  width: 44px; height: 44px; border-radius: 13px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 1.4rem;
+  background: var(--surface-2);
+}
+.sum-main { flex: 1; min-width: 0; }
+.sum-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+.sum-name { font-weight: 700; font-size: .95rem; }
+.sum-count { font-size: .82rem; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.sum-bar-track { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.sum-bar { height: 100%; border-radius: 999px; transition: width .5s cubic-bezier(.22,1,.36,1); }
+.sum-bar.earn { background: linear-gradient(90deg, var(--star), #ffd166); }
+.sum-bar.spend { background: linear-gradient(90deg, #b39ddb, var(--primary)); }
+.sum-stars { font-weight: 800; white-space: nowrap; }
+.sum-stars.earn { color: #b97a10; }
+.sum-stars.spend { color: var(--primary); }
+
 /* ===== Sync ===== */
 .sync-code-box {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
