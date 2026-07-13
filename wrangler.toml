@@ -1,0 +1,7 @@
+name = "good-kids"
+compatibility_date = "2026-07-01"
+pages_build_output_dir = "."
+
+[[kv_namespaces]]
+binding = "GOODKIDS"
+id = "fd69ffedd18040bdbdebbcb679d8d9d6"

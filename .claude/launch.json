@@ -4,7 +4,7 @@
     {
       "name": "goodkids",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "serve", "-l", "8788", "."],
+      "runtimeArgs": ["--yes", "wrangler@latest", "pages", "dev", ".", "--port", "8788"],
       "port": 8788
     }
   ]

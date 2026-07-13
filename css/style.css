@@ -340,6 +340,18 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .confirm-text { text-align: center; color: var(--ink-2); }
 .confirm-text b { color: var(--ink); }
 
+/* ===== Sync ===== */
+.sync-code-box {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--primary-soft); border: 1.5px dashed var(--primary);
+  border-radius: var(--radius-sm); padding: 12px 16px;
+}
+.sync-code {
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 1.15rem; font-weight: 800; letter-spacing: .06em;
+  color: var(--primary-dark); user-select: all;
+}
+
 /* ===== Toast ===== */
 .toast {
   position: fixed; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom));

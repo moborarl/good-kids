@@ -35,22 +35,129 @@ const DEFAULT_DATA = {
     { id: 'r4', name: 'ของเล่นใหม่', icon: '🧸', price: 30 },
   ],
   log: [], // { id, kidId, type: 'earn'|'spend', name, icon, stars, ts }
+  metaTs: 0,      // last edit time of kids/chores/rewards/settings (for sync merge)
+  deletedLog: [], // tombstones: log ids deleted on this family (so sync won't resurrect them)
 };
 
 let data = load();
 let state = { view: 'home', kidId: null, parentUnlocked: false, parentTab: 'kids', pinInput: '' };
 
+function migrate(d) {
+  if (typeof d.metaTs !== 'number') d.metaTs = 0;
+  if (!Array.isArray(d.deletedLog)) d.deletedLog = [];
+  return d;
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return migrate(JSON.parse(raw));
   } catch (e) { /* corrupted -> reset */ }
   const d = JSON.parse(JSON.stringify(DEFAULT_DATA));
   localStorage.setItem(STORE_KEY, JSON.stringify(d));
   return d;
 }
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
+function save() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(data));
+  schedulePush();
+}
+function bumpMeta() { data.metaTs = Date.now(); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+// ---------- Sync (Cloudflare KV via /api/family/:code) ----------
+const SYNC_KEY = 'goodkids-sync-code';
+let syncCode = (localStorage.getItem(SYNC_KEY) || '').toLowerCase();
+let syncState = { status: syncCode ? 'idle' : 'off', last: 0 };
+let pushTimer = null, syncing = false, pendingSync = false;
+
+function genCode() {
+  const part = () => Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 4).padEnd(4, '0');
+  return `${part()}-${part()}-${part()}`;
+}
+
+async function apiGet(code) {
+  const r = await fetch('/api/family/' + encodeURIComponent(code), { cache: 'no-store' });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('sync get failed');
+  return r.json();
+}
+async function apiPut(code, d) {
+  const r = await fetch('/api/family/' + encodeURIComponent(code), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(d),
+  });
+  if (!r.ok) throw new Error('sync put failed');
+}
+
+// Merge: log = union by id (minus tombstones), meta = newer side wins
+function mergeData(a, b) {
+  const metaSrc = (b.metaTs || 0) > (a.metaTs || 0) ? b : a;
+  const deleted = new Set([...(a.deletedLog || []), ...(b.deletedLog || [])]);
+  const byId = new Map();
+  [...(b.log || []), ...(a.log || [])].forEach(l => { if (!deleted.has(l.id)) byId.set(l.id, l); });
+  return {
+    pin: metaSrc.pin,
+    weeklyGoal: metaSrc.weeklyGoal,
+    kids: metaSrc.kids,
+    chores: metaSrc.chores,
+    rewards: metaSrc.rewards,
+    log: [...byId.values()].sort((x, y) => x.ts - y.ts),
+    metaTs: Math.max(a.metaTs || 0, b.metaTs || 0),
+    deletedLog: [...deleted],
+  };
+}
+
+async function syncNow() {
+  if (!syncCode) return;
+  if (syncing) { pendingSync = true; return; }
+  syncing = true;
+  syncState.status = 'syncing';
+  try {
+    const remote = await apiGet(syncCode);
+    const merged = remote ? migrate(mergeData(data, remote)) : data;
+    const localChanged = JSON.stringify(merged) !== JSON.stringify(data);
+    const remoteChanged = !remote || JSON.stringify(merged) !== JSON.stringify(remote);
+    if (localChanged) {
+      data = merged;
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    }
+    if (remoteChanged) await apiPut(syncCode, merged);
+    syncState = { status: 'ok', last: Date.now() };
+    if (localChanged) render();
+    else if (state.view === 'parent' && state.parentTab === 'settings' && state.parentUnlocked) updateSyncStatusLine();
+  } catch (e) {
+    syncState.status = 'error';
+    updateSyncStatusLine();
+  }
+  syncing = false;
+  if (pendingSync) { pendingSync = false; schedulePush(); }
+}
+
+function schedulePush() {
+  if (!syncCode) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(syncNow, 1200);
+}
+
+function syncStatusText() {
+  if (!syncCode) return '';
+  if (syncState.status === 'syncing') return '🔄 กำลัง sync...';
+  if (syncState.status === 'error') return '⚠️ sync ไม่สำเร็จ — จะลองใหม่อัตโนมัติ';
+  if (syncState.last) return `✅ sync ล่าสุด ${new Date(syncState.last).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  return 'รอ sync ครั้งแรก...';
+}
+function updateSyncStatusLine() {
+  const el = document.getElementById('syncStatusLine');
+  if (el) el.textContent = syncStatusText();
+}
+
+setInterval(() => {
+  if (syncCode && document.visibilityState === 'visible') syncNow();
+}, 30000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncNow();
+});
 
 // ---------- Derived ----------
 function kidLog(kidId) { return data.log.filter(l => l.kidId === kidId); }
@@ -421,8 +528,9 @@ function renderTabKids(c) {
     const k = data.kids.find(x => x.id === b.dataset.del);
     confirmModal(`ลบโปรไฟล์ "<b>${esc(k.name)}</b>"?`, 'ประวัติดาวของเด็กคนนี้จะถูกลบด้วย', () => {
       data.kids = data.kids.filter(x => x.id !== k.id);
+      data.log.filter(l => l.kidId === k.id).forEach(l => data.deletedLog.push(l.id));
       data.log = data.log.filter(l => l.kidId !== k.id);
-      save(); renderParent(); toast('ลบโปรไฟล์แล้ว');
+      bumpMeta(); save(); renderParent(); toast('ลบโปรไฟล์แล้ว');
     });
   }));
 }
@@ -471,7 +579,7 @@ function kidForm(id) {
     if (!name) { toast('กรุณาใส่ชื่อเด็ก'); return; }
     if (k) { k.name = name; k.avatar = avatar; k.color = color; }
     else data.kids.push({ id: uid(), name, avatar, color });
-    save(); closeModal(); renderParent(); toast(k ? 'แก้ไขแล้ว ✓' : `เพิ่ม "${name}" แล้ว ✓`);
+    bumpMeta(); save(); closeModal(); renderParent(); toast(k ? 'แก้ไขแล้ว ✓' : `เพิ่ม "${name}" แล้ว ✓`);
   });
 }
 
@@ -500,7 +608,7 @@ function renderTabChores(c) {
     const ch = data.chores.find(x => x.id === b.dataset.del);
     confirmModal(`ลบงาน "<b>${esc(ch.name)}</b>"?`, 'ประวัติที่บันทึกไปแล้วจะยังอยู่', () => {
       data.chores = data.chores.filter(x => x.id !== ch.id);
-      save(); renderParent(); toast('ลบแล้ว');
+      bumpMeta(); save(); renderParent(); toast('ลบแล้ว');
     });
   }));
 }
@@ -530,7 +638,7 @@ function renderTabRewards(c) {
     const r = data.rewards.find(x => x.id === b.dataset.del);
     confirmModal(`ลบของรางวัล "<b>${esc(r.name)}</b>"?`, '', () => {
       data.rewards = data.rewards.filter(x => x.id !== r.id);
-      save(); renderParent(); toast('ลบแล้ว');
+      bumpMeta(); save(); renderParent(); toast('ลบแล้ว');
     });
   }));
 }
@@ -583,7 +691,7 @@ function itemForm(kind, id) {
     } else {
       data.rewards.push({ id: uid(), name, icon, price: stars });
     }
-    save(); closeModal(); renderParent(); toast('บันทึกแล้ว ✓');
+    bumpMeta(); save(); closeModal(); renderParent(); toast('บันทึกแล้ว ✓');
   });
 }
 
@@ -607,6 +715,7 @@ function renderTabHistory(c) {
   `;
   c.querySelectorAll('[data-dellog]').forEach(b => b.addEventListener('click', () => {
     confirmModal('ลบรายการนี้?', 'ดาวจะถูกคืน/หักตามรายการที่ลบ', () => {
+      data.deletedLog.push(b.dataset.dellog);
       data.log = data.log.filter(l => l.id !== b.dataset.dellog);
       save(); renderParent(); toast('ลบรายการแล้ว');
     });
@@ -615,6 +724,32 @@ function renderTabHistory(c) {
 
 // ----- Tab: Settings -----
 function renderTabSettings(c) {
+  const syncSection = syncCode ? `
+      <label class="form-label">🔗 Sync ข้ามเครื่อง — เปิดอยู่</label>
+      <div class="sync-code-box">
+        <span class="sync-code" id="syncCodeText">${esc(syncCode)}</span>
+        <button class="btn btn-ghost btn-sm" id="syncCopy">📋 คัดลอก</button>
+      </div>
+      <p class="pin-hint" style="text-align:left;margin-top:8px">
+        นำรหัสครอบครัวนี้ไปใส่ในเครื่องอื่น (iPad / iPhone / คอมพิวเตอร์) ที่เมนูเดียวกันนี้
+        ข้อมูลจะ sync อัตโนมัติทุก 30 วินาทีและทุกครั้งที่มีการแก้ไข</p>
+      <p class="pin-hint" style="text-align:left" id="syncStatusLine">${syncStatusText()}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+        <button class="btn btn-ghost btn-sm" id="syncNowBtn">🔄 Sync เดี๋ยวนี้</button>
+        <button class="btn btn-danger btn-sm" id="syncOff">ปิดการ sync เครื่องนี้</button>
+      </div>` : `
+      <label class="form-label">🔗 Sync ข้ามเครื่อง</label>
+      <p class="pin-hint" style="text-align:left;margin-top:0">
+        เชื่อมข้อมูลระหว่าง iPad / iPhone / คอมพิวเตอร์ ด้วย "รหัสครอบครัว" —
+        สร้างรหัสบนเครื่องแรก แล้วนำรหัสไปใส่บนเครื่องอื่น</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-primary btn-sm" id="syncCreate">✨ สร้างรหัสครอบครัวใหม่</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <input class="form-input" id="syncJoinCode" placeholder="ใส่รหัสจากเครื่องแรก เช่น ab12-cd34-ef56" style="flex:1;min-width:200px">
+        <button class="btn btn-ghost" id="syncJoin">เชื่อมต่อ</button>
+      </div>`;
+
   c.innerHTML = `
     <div class="card" style="padding:22px">
       <div class="form-group">
@@ -627,16 +762,54 @@ function renderTabSettings(c) {
       </div>
       <button class="btn btn-primary" id="sSave">บันทึกการตั้งค่า</button>
       <hr style="border:none;border-top:1px solid var(--line);margin:22px 0">
+      ${syncSection}
+      <hr style="border:none;border-top:1px solid var(--line);margin:22px 0">
       <label class="form-label">สำรอง / ย้ายข้อมูล</label>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" id="sExport">⬇️ Export ข้อมูล</button>
         <button class="btn btn-ghost btn-sm" id="sImport">⬆️ Import ข้อมูล</button>
         <button class="btn btn-danger btn-sm" id="sReset">🗑️ ล้างข้อมูลทั้งหมด</button>
       </div>
-      <p class="pin-hint" style="text-align:left">ข้อมูลถูกเก็บในเครื่องนี้ (localStorage) — ใช้ Export/Import เพื่อย้ายข้อมูลระหว่าง iPad / iPhone / คอมพิวเตอร์</p>
+      <p class="pin-hint" style="text-align:left">Export/Import ใช้สำรองข้อมูลเป็นไฟล์ JSON</p>
       <input type="file" id="sFile" accept=".json" style="display:none">
     </div>
   `;
+
+  if (syncCode) {
+    $('#syncCopy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(syncCode); toast('คัดลอกรหัสแล้ว ✓'); }
+      catch { toast('คัดลอกไม่สำเร็จ — จดรหัสด้วยตนเอง'); }
+    });
+    $('#syncNowBtn').addEventListener('click', () => { syncNow(); toast('กำลัง sync...'); });
+    $('#syncOff').addEventListener('click', () => {
+      confirmModal('ปิดการ sync เครื่องนี้?', 'ข้อมูลบนเครื่องนี้ยังอยู่ แต่จะไม่รับ-ส่งกับเครื่องอื่นอีก', () => {
+        syncCode = ''; localStorage.removeItem(SYNC_KEY);
+        syncState = { status: 'off', last: 0 };
+        renderParent(); toast('ปิดการ sync แล้ว');
+      });
+    });
+  } else {
+    $('#syncCreate').addEventListener('click', async () => {
+      const code = genCode();
+      syncCode = code; localStorage.setItem(SYNC_KEY, code);
+      bumpMeta(); localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      await syncNow();
+      renderParent();
+      toast(syncState.status === 'error' ? 'สร้างรหัสแล้ว แต่ยัง sync ไม่สำเร็จ' : 'เปิด sync แล้ว ✓ นำรหัสไปใส่เครื่องอื่นได้เลย');
+    });
+    $('#syncJoin').addEventListener('click', async () => {
+      const code = $('#syncJoinCode').value.trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{4,38}[a-z0-9]$/.test(code)) { toast('รูปแบบรหัสไม่ถูกต้อง'); return; }
+      toast('กำลังเชื่อมต่อ...');
+      try {
+        const remote = await apiGet(code);
+        if (!remote) { toast('ไม่พบรหัสนี้ — ตรวจสอบรหัสจากเครื่องแรกอีกครั้ง'); return; }
+        syncCode = code; localStorage.setItem(SYNC_KEY, code);
+        await syncNow();
+        renderParent(); toast('เชื่อมต่อสำเร็จ ✓ ข้อมูล sync แล้ว');
+      } catch { toast('เชื่อมต่อไม่สำเร็จ ลองใหม่อีกครั้ง'); }
+    });
+  }
   $('#sSave').addEventListener('click', () => {
     const goal = parseInt($('#sGoal').value, 10);
     if (goal >= 1) data.weeklyGoal = Math.min(999, goal);
@@ -645,7 +818,7 @@ function renderTabSettings(c) {
       if (!/^\d{4}$/.test(pin)) { toast('PIN ต้องเป็นตัวเลข 4 หลัก'); return; }
       data.pin = pin;
     }
-    save(); renderParent(); toast('บันทึกการตั้งค่าแล้ว ✓');
+    bumpMeta(); save(); renderParent(); toast('บันทึกการตั้งค่าแล้ว ✓');
   });
   $('#sExport').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -665,14 +838,16 @@ function renderTabSettings(c) {
       try {
         const d = JSON.parse(reader.result);
         if (!d.kids || !d.chores || !d.rewards || !Array.isArray(d.log)) throw new Error('bad');
-        data = d; save(); renderParent(); toast('นำเข้าข้อมูลสำเร็จ ✓');
+        data = migrate(d); bumpMeta(); save(); renderParent(); toast('นำเข้าข้อมูลสำเร็จ ✓');
       } catch { toast('ไฟล์ไม่ถูกต้อง'); }
     };
     reader.readAsText(file);
   });
   $('#sReset').addEventListener('click', () => {
-    confirmModal('ล้างข้อมูลทั้งหมด?', 'โปรไฟล์ งานบ้าน ของรางวัล และประวัติทั้งหมดจะหายไป <b>กู้คืนไม่ได้</b>', () => {
+    confirmModal('ล้างข้อมูลทั้งหมด?', 'โปรไฟล์ งานบ้าน ของรางวัล และประวัติทั้งหมดจะหายไป <b>กู้คืนไม่ได้</b>' + (syncCode ? '<br>การ sync ของเครื่องนี้จะถูกปิดด้วย' : ''), () => {
       localStorage.removeItem(STORE_KEY);
+      localStorage.removeItem(SYNC_KEY);
+      syncCode = ''; syncState = { status: 'off', last: 0 };
       data = load();
       state.parentUnlocked = false;
       go('home'); toast('ล้างข้อมูลแล้ว — เริ่มต้นใหม่');
@@ -696,3 +871,4 @@ function confirmModal(title, sub, onOk) {
 
 // ---------- Boot ----------
 render();
+syncNow();
